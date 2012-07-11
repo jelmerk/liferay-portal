@@ -43,6 +43,7 @@ import java.util.Dictionary;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,6 +54,7 @@ import javax.servlet.FilterConfig;
 import javax.servlet.RequestDispatcher;
 import javax.servlet.Servlet;
 import javax.servlet.ServletConfig;
+import javax.servlet.ServletContext;
 import javax.servlet.ServletContextAttributeEvent;
 import javax.servlet.ServletContextAttributeListener;
 import javax.servlet.ServletContextEvent;
@@ -66,6 +68,8 @@ import javax.servlet.http.HttpSessionBindingListener;
 import javax.servlet.http.HttpSessionListener;
 
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceRegistration;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.service.http.HttpContext;
 import org.osgi.service.http.NamespaceException;
@@ -87,6 +91,8 @@ public class BundleServletContext extends LiferayServletContext
 
 	public void close() {
 		_httpServiceTracker.close();
+
+		_servletContextregistration.unregister();
 
 		FileUtil.deltree(_tempDir);
 	}
@@ -370,8 +376,22 @@ public class BundleServletContext extends LiferayServletContext
 	}
 
 	public void open() {
-		_httpServiceTracker = new HttpServiceTracker(
-				_bundle.getBundleContext());
+		Dictionary<String,String> headers = _bundle.getHeaders();
+
+		String webContextPath = headers.get(WEB_CONTEXTPATH);
+
+		Hashtable<String, Object> properties = new Hashtable<String, Object>();
+
+		properties.put("osgi.web.symbolicname", _bundle.getSymbolicName());
+		properties.put("osgi.web.version", _bundle.getVersion().toString());
+		properties.put("osgi.web.contextpath", webContextPath);
+
+		BundleContext bundleContext = _bundle.getBundleContext();
+
+		_servletContextregistration = bundleContext.registerService(
+				ServletContext.class, this, properties);
+
+		_httpServiceTracker = new HttpServiceTracker(bundleContext);
 
 		_httpServiceTracker.open();
 	}
@@ -850,6 +870,7 @@ public class BundleServletContext extends LiferayServletContext
 			new ArrayList<ServletContextAttributeListener>();
 	private List<ServletContextListener> _servletContextListeners =
 		new ArrayList<ServletContextListener>();
+	private ServiceRegistration<ServletContext> _servletContextregistration;
 	private List<ServletRequestAttributeListener>
 		_servletRequestAttributeListeners =
 			new ArrayList<ServletRequestAttributeListener>();

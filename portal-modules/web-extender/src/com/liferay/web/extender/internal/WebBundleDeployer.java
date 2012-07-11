@@ -25,19 +25,15 @@ import com.liferay.web.extender.internal.servlet.WebExtenderServlet;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Dictionary;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import javax.servlet.ServletContext;
 
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleEvent;
 import org.osgi.framework.BundleListener;
-import org.osgi.framework.ServiceRegistration;
 
 /**
  * @author Raymond Augé
@@ -49,10 +45,6 @@ public class WebBundleDeployer
 	public WebBundleDeployer(WebExtenderServlet webExtenderServlet)
 		throws Exception {
 
-		_trackedContexts =
-			new ConcurrentHashMap<String, BundleServletContext>();
-		_trackedRegistrations =
-			new ConcurrentHashMap<String, ServiceRegistration<ServletContext>>();
 		_webExtenderServlet = webExtenderServlet;
 	}
 
@@ -85,22 +77,21 @@ public class WebBundleDeployer
 	}
 
 	public void close() {
-		for (Map.Entry<String, BundleServletContext> entry :
-				_trackedContexts.entrySet()) {
+		for (Bundle bundle : Activator.getBundleContext().getBundles()) {
+			String servletContextName =
+				BundleServletContext.getServletContextName(bundle);
 
-			String servletContextName = entry.getKey();
-			BundleServletContext bundleServletContext = entry.getValue();
-
-			Bundle bundle = bundleServletContext.getBundle();
-
-			doStop(bundle, servletContextName);
+			if (Validator.isNotNull(servletContextName)) {
+				try {
+					doStop(bundle, servletContextName);
+				}
+				catch (Exception e) {
+					_log.error(e, e);
+				}
+			}
 		}
 
 		_webExtenderServlet = null;
-		_trackedContexts.clear();
-		_trackedContexts = null;
-		_trackedRegistrations.clear();
-		_trackedRegistrations = null;
 	}
 
 	public void doStart(Bundle bundle, String servletContextName) {
@@ -116,7 +107,7 @@ public class WebBundleDeployer
 		if (servletContext != null) {
 			EventUtil.sendEvent(bundle, EventUtil.FAILED, null, true);
 
-			_collidedWabs.add(bundle);
+			_collidedWabBundleIds.add(bundle.getBundleId());
 
 			return;
 		}
@@ -127,31 +118,7 @@ public class WebBundleDeployer
 			bundleServletContext = new BundleServletContext(
 				bundle, _webExtenderServlet);
 
-			Dictionary<String,String> headers = bundle.getHeaders();
-
-			String webContextPath = headers.get(WEB_CONTEXTPATH);
-
-			Hashtable<String, Object> properties =
-				new Hashtable<String, Object>();
-
-			properties.put("osgi.web.symbolicname", bundle.getSymbolicName());
-			properties.put("osgi.web.version", bundle.getVersion().toString());
-			properties.put("osgi.web.contextpath", webContextPath);
-
-			ServiceRegistration<ServletContext> registration =
-				Activator.getBundleContext().registerService(
-					ServletContext.class, bundleServletContext, properties);
-
-			// register in the current thread that the deployment process
-			// has been started in the Module Framework
-
-			// This is required in order to keep both deployment
-			// mechanism
-
 			bundleServletContext.open();
-
-			_trackedContexts.put(servletContextName, bundleServletContext);
-			_trackedRegistrations.put(servletContextName, registration);
 
 			EventUtil.sendEvent(bundle, EventUtil.DEPLOYED, null, false);
 		}
@@ -163,12 +130,18 @@ public class WebBundleDeployer
 	protected void doStop(Bundle bundle, String servletContextName) {
 		EventUtil.sendEvent(bundle, EventUtil.UNDEPLOYING, null, false);
 
-		BundleServletContext bundleServletContext = _trackedContexts.get(
-			servletContextName);
-		ServiceRegistration<ServletContext> registration =
-			_trackedRegistrations.get(servletContextName);
+		BundleServletContext bundleServletContext = null;
 
-		if ((bundleServletContext == null) || (registration == null)) {
+		ServletContext servletContext = ServletContextPool.get(
+			servletContextName);
+
+		if ((servletContext != null) &&
+			(servletContext instanceof BundleServletContext)) {
+
+			bundleServletContext = (BundleServletContext)servletContext;
+		}
+
+		if (bundleServletContext == null) {
 			EventUtil.sendEvent(bundle, EventUtil.UNDEPLOYED, null, false);
 
 			return;
@@ -181,52 +154,52 @@ public class WebBundleDeployer
 			EventUtil.sendEvent(bundle, EventUtil.FAILED, null, false);
 		}
 
-		registration.unregister();
-
-		_trackedContexts.remove(servletContextName);
-		_trackedRegistrations.remove(servletContextName);
-
 		EventUtil.sendEvent(bundle, EventUtil.UNDEPLOYED, null, false);
+
+		handleCollidedWabs(bundle, servletContextName);
 	}
 
-	protected void handleCollidedWabs(String servletContextName) {
-		if (_collidedWabs.isEmpty()) {
+	protected void handleCollidedWabs(
+		Bundle bundle, String servletContextName) {
+
+		if (_collidedWabBundleIds.isEmpty()) {
 			return;
 		}
 
-		Bundle candidate = null;
+		Iterator<Long> iterator = _collidedWabBundleIds.iterator();
 
-		Iterator<Bundle> iterator = _collidedWabs.iterator();
+		BundleContext bundleContext = Activator.getBundleContext();
 
 		while (iterator.hasNext()) {
-			Bundle collidedWab = iterator.next();
+			long bundleId = iterator.next();
+			Bundle candidate = bundleContext.getBundle(bundleId);
+
+			if (candidate == null) {
+				iterator.remove();
+
+				continue;
+			}
 
 			String curServletContextName =
-				BundleServletContext.getServletContextName(collidedWab);
+				BundleServletContext.getServletContextName(candidate);
 
 			if (servletContextName.equals(curServletContextName) &&
-				((candidate == null) ||
-				 (collidedWab.getBundleId() < collidedWab.getBundleId()))) {
-
-				candidate = collidedWab;
+				(bundle.getBundleId() != candidate.getBundleId())) {
 
 				iterator.remove();
-			}
-		}
 
-		if (candidate != null) {
-			doStart(candidate, servletContextName);
+				doStart(candidate, servletContextName);
+
+				break;
+			}
 		}
 	}
 
 	private static final Log _log = LogFactoryUtil.getLog(
 		WebBundleDeployer.class);
 
-	private List<Bundle> _collidedWabs = Collections.synchronizedList(
-		new ArrayList<Bundle>());
-	private Map<String, BundleServletContext> _trackedContexts;
-	private Map<String, ServiceRegistration<ServletContext>>
-		_trackedRegistrations;
+	private List<Long> _collidedWabBundleIds = Collections.synchronizedList(
+		new ArrayList<Long>());
 	private WebExtenderServlet _webExtenderServlet;
 
 }
