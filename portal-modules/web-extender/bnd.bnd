@@ -42,6 +42,7 @@ Private-Package: \
 	com.liferay.web.extender.internal.definition,\
 	com.liferay.web.extender.internal.event,\
 	com.liferay.web.extender.internal.http,\
+	com.liferay.web.extender.internal.introspection,\
 	com.liferay.web.extender.internal.servlet,\
 	com.liferay.web.extender.internal.servlet.dependencies,\
 	com.liferay.web.extender.internal.webbundle,\

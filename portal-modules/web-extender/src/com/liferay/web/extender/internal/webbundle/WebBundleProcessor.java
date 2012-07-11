@@ -49,6 +49,10 @@ import com.liferay.portal.util.Portal;
 import com.liferay.portal.util.PropsValues;
 import com.liferay.portlet.dynamicdatamapping.util.DDMXMLUtil;
 import com.liferay.util.ant.ExpandTask;
+import com.liferay.web.extender.internal.introspection.ClassLoaderSource;
+import com.liferay.web.extender.internal.introspection.FileSource;
+import com.liferay.web.extender.internal.introspection.Source;
+import com.liferay.web.extender.internal.introspection.ZipSource;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -148,9 +152,21 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 				ModuleFrameworkConstants.LIFERAY_FORCE_WAB_PROCESSING), false);
 
 		if (Validator.isNull(bundleSymbolicName) || force) {
+			File classesFolder = new File(
+				_deployedAppFolder, "WEB-INF/classes/");
+
+			Source source = null;
+
+			if (classesFolder.exists() && classesFolder.isDirectory() &&
+				classesFolder.canRead()) {
+
+				source = new FileSource(
+					classesFolder, getSystemBundleClassLoader());
+			}
+
 			_processPaths(
 				_resourcePaths, _deployedAppFolder, _deployedAppFolder.toURI(),
-				webContextpath);
+				source, webContextpath);
 
 			// The order of these operations is important
 
@@ -300,8 +316,14 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 	protected void processClass(
 			DependencyVisitor dependencyVisitor, String className,
-			InputStream inputStream, List<String> packageList)
+			Source source, List<String> packageList)
 		throws IOException {
+
+		if (className.startsWith("java/")) {
+			return;
+		}
+
+		InputStream inputStream = source.getResourceAsStream(className);
 
 		if (inputStream == null) {
 			return;
@@ -326,32 +348,64 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 				packageList.add(packageName);
 			}
+
+			String superName = classReader.getSuperName();
+
+			if (superName != null) {
+				processReferencedDependencies(
+					superName.replace('.', '/') + ".class", source);
+			}
+
+			String[] interfaces = classReader.getInterfaces();
+
+			if ((interfaces != null) && (interfaces.length > 0)) {
+				processInterfaces(interfaces, source);
+			}
 		}
 		catch (Exception e) {
 			_log.error(e);
 		}
 	}
 
-	protected void processClassDependencies(File classFile) throws IOException {
-		FileInputStream fis = new FileInputStream(classFile);
+	protected void processInterfaces(String[] interfaces, Source source)
+		throws IOException {
 
-		processClassDependencies(classFile.getName(), fis);
+		for (String interfaceName : interfaces) {
+			processReferencedDependencies(
+				interfaceName.replace('.', '/') + ".class", source);
+		}
 	}
 
-	protected void processClassDependencies(
-			String className, InputStream inputStream)
+	protected void processClassDependencies(String className, Source source)
 		throws IOException {
 
 		DependencyVisitor dependencyVisitor = new DependencyVisitor();
 
-		processClass(
-			dependencyVisitor, className, inputStream, _referencedPackages);
+		processClass(dependencyVisitor, className, source, _referencedPackages);
 
-		Set<String> jarPackages = dependencyVisitor.getGlobals().keySet();
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
-		for (String jarPackage : jarPackages) {
+		for (String referencedPackage : packages) {
 			_classProvidedPackages.add(
-				jarPackage.replaceAll(StringPool.SLASH, StringPool.PERIOD));
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
+		}
+	}
+
+	protected void processReferencedDependencies(
+			String className, Source source)
+		throws IOException {
+
+		DependencyVisitor dependencyVisitor = new DependencyVisitor();
+
+		processClass(dependencyVisitor, className, source, _referencedPackages);
+
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
+
+		for (String referencedPackage : packages) {
+			_referencedPackages.add(
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
 		}
 	}
 
@@ -530,6 +584,8 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 		ZipFile zipFile = new ZipFile(jarFile);
 
+		Source source = new ZipSource(zipFile, getSystemBundleClassLoader());
+
 		Enumeration<? extends ZipEntry> en = zipFile.entries();
 
 		while (en.hasMoreElements()) {
@@ -538,26 +594,24 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 			String name = zipEntry.getName();
 
 			if (name.endsWith(".class")) {
-				InputStream inputStream = zipFile.getInputStream(zipEntry);
-
 				processClass(
-					dependencyVisitor, name, inputStream,
-					_jarReferencedPackages);
+					dependencyVisitor, name, source, _jarReferencedPackages);
 			}
 		}
 
-		Set<String> jarPackages = dependencyVisitor.getGlobals().keySet();
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
-		for (String jarPackage : jarPackages) {
+		for (String referencedPackage : packages) {
 			jarProvidedPackages.add(
-				jarPackage.replaceAll(StringPool.SLASH, StringPool.PERIOD));
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
 		}
 	}
 
 	protected void processJspDependencies(File jspFile) throws IOException {
 		DependencyVisitor dependencyVisitor = new DependencyVisitor();
 
-		ClassLoader classLoader = getSystemBundleClassLoader();
+		Source source = new ClassLoaderSource(getSystemBundleClassLoader());
 
 		String content = FileUtil.read(jspFile);
 
@@ -566,18 +620,17 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 		while (matcher.find()) {
 			String value = matcher.group(1);
 
-			InputStream inputStream = classLoader.getResourceAsStream(
-				value.replace('.', '/') + ".class");
-
 			processClass(
-				dependencyVisitor, value, inputStream, _referencedPackages);
+				dependencyVisitor, value.replace('.', '/') + ".class", source,
+				_referencedPackages);
 		}
 
-		Set<String> jarPackages = dependencyVisitor.getGlobals().keySet();
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
-		for (String jarPackage : jarPackages) {
+		for (String referencedPackage : packages) {
 			_referencedPackages.add(
-				jarPackage.replaceAll(StringPool.SLASH, StringPool.PERIOD));
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
 		}
 	}
 
@@ -855,7 +908,7 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 	protected void processTldDependencies(File tldFile) throws IOException {
 		DependencyVisitor dependencyVisitor = new DependencyVisitor();
 
-		ClassLoader classLoader = getSystemBundleClassLoader();
+		Source source = new ClassLoaderSource(getSystemBundleClassLoader());
 
 		String content = FileUtil.read(tldFile);
 
@@ -864,18 +917,17 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 		while (matcher.find()) {
 			String value = matcher.group(1).trim();
 
-			InputStream inputStream = classLoader.getResourceAsStream(
-				value.replace('.', '/') + ".class");
-
 			processClass(
-				dependencyVisitor, value, inputStream, _referencedPackages);
+				dependencyVisitor, value.replace('.', '/') + ".class", source,
+				_referencedPackages);
 		}
 
-		Set<String> jarPackages = dependencyVisitor.getGlobals().keySet();
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
-		for (String jarPackage : jarPackages) {
+		for (String referencedPackage : packages) {
 			_referencedPackages.add(
-				jarPackage.replaceAll(StringPool.SLASH, StringPool.PERIOD));
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
 		}
 	}
 
@@ -885,7 +937,7 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 		DependencyVisitor dependencyVisitor = new DependencyVisitor();
 
-		ClassLoader classLoader = getSystemBundleClassLoader();
+		Source source = new ClassLoaderSource(getSystemBundleClassLoader());
 
 		String content = FileUtil.read(xmlFile);
 
@@ -909,19 +961,18 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 			for (Node node : selectNodes) {
 				String value = node.getText().trim();
 
-				InputStream inputStream = classLoader.getResourceAsStream(
-					value.replace('.', '/') + ".class");
-
 				processClass(
-					dependencyVisitor, value, inputStream, _referencedPackages);
+					dependencyVisitor, value.replace('.', '/') + ".class",
+					source, _referencedPackages);
 			}
 		}
 
-		Set<String> jarPackages = dependencyVisitor.getGlobals().keySet();
+		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
-		for (String jarPackage : jarPackages) {
+		for (String referencedPackage : packages) {
 			_referencedPackages.add(
-				jarPackage.replaceAll(StringPool.SLASH, StringPool.PERIOD));
+				referencedPackage.replaceAll(
+					StringPool.SLASH, StringPool.PERIOD));
 		}
 	}
 
@@ -1014,7 +1065,8 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 	}
 
 	protected void _processPaths(
-			List<String> resourcePaths, File directory, URI baseURI, String webContextpath)
+			List<String> resourcePaths, File directory, URI baseURI,
+			Source source, String webContextpath)
 		throws IOException {
 
 		File[] files = directory.listFiles();
@@ -1027,7 +1079,9 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 			if (relativePath.startsWith("WEB-INF/classes/") &&
 				relativePath.endsWith(".class")) {
 
-				processClassDependencies(file);
+				processClassDependencies(
+					relativePath.replace("WEB-INF/classes/", StringPool.BLANK),
+					source);
 			}
 			else if (relativePath.equals(
 						"WEB-INF/lib" + webContextpath + "-service.jar")) {
@@ -1048,7 +1102,8 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 			}
 
 			if (file.isDirectory()) {
-				_processPaths(resourcePaths, file, baseURI, webContextpath);
+				_processPaths(
+					resourcePaths, file, baseURI, source, webContextpath);
 			}
 		}
 	}
