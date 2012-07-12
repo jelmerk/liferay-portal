@@ -248,6 +248,10 @@ public class ModuleFrameworkUtil implements ModuleFrameworkConstants {
 
 		Collections.sort(packages);
 
+		if (_log.isDebugEnabled()) {
+			_log.debug("The portal's system bundle is exporting the following packages: \n" + StringUtil.merge(packages).replace(",", "\n"));
+		}
+
 		properties.put(
 			Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA,
 			StringUtil.merge(packages));
@@ -334,6 +338,24 @@ public class ModuleFrameworkUtil implements ModuleFrameworkConstants {
 		ClassLoader classLoader = PACLClassLoaderUtil.getPortalClassLoader();
 
 		Enumeration<URL> enu = classLoader.getResources("META-INF/MANIFEST.MF");
+
+		ClassLoader parent = classLoader.getParent();
+
+		if (parent != null) {
+			Set<URL> set = new HashSet<URL>();
+
+			while (enu.hasMoreElements()) {
+				set.add(enu.nextElement());
+			}
+
+			enu = parent.getResources("META-INF/MANIFEST.MF");
+
+			while (enu.hasMoreElements()) {
+				set.add(enu.nextElement());
+			}
+
+			enu = Collections.enumeration(set);
+		}
 
 		while (enu.hasMoreElements()) {
 			URL url = enu.nextElement();
