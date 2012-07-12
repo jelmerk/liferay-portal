@@ -335,30 +335,32 @@ public class ModuleFrameworkUtil implements ModuleFrameworkConstants {
 			String[] bundleSymbolicNames, List<String> packages)
 		throws Exception {
 
+		Set<URL> set = new HashSet<URL>();
+
 		ClassLoader classLoader = PACLClassLoaderUtil.getPortalClassLoader();
+
+		URL url = null;
 
 		Enumeration<URL> enu = classLoader.getResources("META-INF/MANIFEST.MF");
 
-		ClassLoader parent = classLoader.getParent();
+		while (enu.hasMoreElements()) {
+			url = enu.nextElement();
 
-		if (parent != null) {
-			Set<URL> set = new HashSet<URL>();
-
-			while (enu.hasMoreElements()) {
-				set.add(enu.nextElement());
-			}
-
-			enu = parent.getResources("META-INF/MANIFEST.MF");
-
-			while (enu.hasMoreElements()) {
-				set.add(enu.nextElement());
-			}
-
-			enu = Collections.enumeration(set);
+			set.add(url);
 		}
 
+		enu = Validator.class.getClassLoader().getResources("/META-INF/MANIFEST.MF");
+
 		while (enu.hasMoreElements()) {
-			URL url = enu.nextElement();
+			url = enu.nextElement();
+
+			set.add(url);
+		}
+
+		enu = Collections.enumeration(set);
+
+		while (enu.hasMoreElements()) {
+			url = enu.nextElement();
 
 			Manifest manifest = new Manifest(url.openStream());
 
