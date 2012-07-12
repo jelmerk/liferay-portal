@@ -57,6 +57,7 @@ import com.liferay.web.extender.internal.introspection.ZipSource;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -116,7 +117,13 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 		_deployedAppFolder = autoDeploymentContext.getDeployDir();
 
 		if (!PropsValues.AUTO_DEPLOY_UNPACK_WAR) {
-			File[] listFiles = _deployedAppFolder.getParentFile().listFiles();
+			File[] listFiles = _deployedAppFolder.getParentFile().listFiles(
+				new FilenameFilter() {
+					public boolean accept(File dir, String name) {
+						return name.endsWith(".war");
+					}
+				}
+			);
 
 			if ((listFiles == null) || (listFiles.length == 0)) {
 				// TODO Something happened here, but not sure what yet.
