@@ -405,12 +405,13 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 		DependencyVisitor dependencyVisitor = new DependencyVisitor();
 
-		processClass(dependencyVisitor, className, source, _referencedPackages);
+		processClass(
+			dependencyVisitor, className, source, _deepReferencePackages);
 
 		Set<String> packages = dependencyVisitor.getGlobals().keySet();
 
 		for (String referencedPackage : packages) {
-			_referencedPackages.add(
+			_deepReferencePackages.add(
 				referencedPackage.replaceAll(
 					StringPool.SLASH, StringPool.PERIOD));
 		}
@@ -514,17 +515,28 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 				continue;
 			}
 
-			if (_classProvidedPackages.contains(packageName)) {
-				_exportPackages.add(packageName);
-			}
-			else {
+			if (!_classProvidedPackages.contains(packageName)) {
 				_importPackages.add(packageName);
 			}
 		}
 
-		for (String packageName : _classProvidedPackages) {
-			_exportPackages.add(packageName);
+		for (Iterator<String> itr = _deepReferencePackages.iterator();
+				itr.hasNext();) {
+
+			String nextDeepReference = itr.next();
+
+			if (nextDeepReference.startsWith("java.") ||
+				_referencedPackages.contains(nextDeepReference) ||
+				_classProvidedPackages.contains(nextDeepReference) ||
+				_jarProvidedPackages.contains(nextDeepReference)) {
+
+				itr.remove();
+			}
 		}
+
+		_importPackages.addAll(_deepReferencePackages);
+
+		_exportPackages.addAll(_classProvidedPackages);
 
 		String[] privatePackages = StringUtil.split(
 			GetterUtil.getString(attributes.getValue("Private-Package")));
@@ -570,7 +582,9 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 				sb.append(packageName);
 
-				if (_jarReferencedPackages.contains(packageName)) {
+				if (_jarReferencedPackages.contains(packageName) ||
+					_deepReferencePackages.contains(packageName)) {
+
 					sb.append(";resolution:=\"optional\"");
 				}
 
@@ -1184,6 +1198,7 @@ public class WebBundleProcessor implements ModuleFrameworkConstants {
 
 	private BaseDeployer _baseDeployer;
 	private List<String> _classProvidedPackages = new UniqueList<String>();
+	private List<String> _deepReferencePackages = new UniqueList<String>();
 	private File _deployedAppFolder;
 	private List<String> _exportPackages = new UniqueList<String>();
 	private File _file;
